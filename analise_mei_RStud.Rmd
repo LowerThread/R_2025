@@ -1,0 +1,119 @@
+---
+title: "Análise dos MEIs — UF & Municípios"
+author: "Rafael; Felipe Gabriel; Lucas Vinhas; Letícia Guarino; Gustavo Masashi e Bruno Dalben;"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    fig_width: 8
+    fig_height: 5
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(readxl)
+library(knitr)
+library(scales)
+```
+
+# 0) Leitura dos dados
+
+```{r}
+uf_raw  <- readr::read_csv("relatorio_mei_UF.csv",  show_col_types = FALSE)
+mun_raw <- readr::read_csv("relatorio_mei_Mun.csv", show_col_types = FALSE)
+
+names(uf_raw); names(mun_raw)
+head(uf_raw, 3)
+head(mun_raw, 3)
+```
+
+# 1) Normalização simples (UF/TOTAL e MUNICIPIO/TOTAL)
+
+```{r}
+uf <- uf_raw |>
+  rename(UF = any_of(c("UF")), TOTAL = any_of(c("TOTAL"))) |>
+  mutate(TOTAL = as.numeric(TOTAL)) |>
+  filter(!is.na(UF), !is.na(TOTAL))
+
+mun <- mun_raw |>
+  rename(MUNICIPIO = any_of(c("MUNICIPIO")), TOTAL = any_of(c("TOTAL"))) |>
+  mutate(TOTAL = as.numeric(TOTAL)) |>
+  filter(!is.na(MUNICIPIO), !is.na(TOTAL))
+
+kable(head(uf, 10), caption = "Amostra — UF x TOTAL")
+kable(head(mun, 10), caption = "Amostra — MUNICIPIO x TOTAL")
+```
+
+# 2) Concentração — **por UF** e **por Município**
+
+## 2.1 Concentração UFs (Tabelas e gráfico)
+
+```{r}
+top_uf  <- uf |>
+  arrange(desc(TOTAL)) |>
+  mutate(Share = TOTAL / sum(TOTAL)) |>
+  slice_head(n = 10)
+
+kable(top_uf, caption = "Top 10 UFs por número de MEIs (TOTAL)")
+
+ggplot(top_uf, aes(x = reorder(UF, Share), y = Share)) +
+  geom_col() +
+  coord_flip() +
+  scale_y_continuous(labels = percent) +
+  labs(x = NULL, y = "% do total nacional", title = "UF — Top 10 por participação de MEIs") +
+  theme_minimal(base_size = 12)
+```
+
+## 2.2 Concentração Municípios (Tabelas e gráfico)
+```{r}
+top_mun <- mun |>
+  arrange(desc(TOTAL)) |>
+  mutate(Share = TOTAL / sum(TOTAL)) |>
+  slice_head(n = 10)
+
+kable(top_mun, caption = "Top 10 Municípios por número de MEIs (TOTAL)")
+
+ggplot(top_mun, aes(x = reorder(MUNICIPIO, Share), y = Share)) +
+  geom_col() +
+  coord_flip() +
+  scale_y_continuous(labels = percent) +
+  labs(x = NULL, y = "% do total (municípios na amostra)", title = "Municípios — Top 10 por participação de MEIs") +
+  theme_minimal(base_size = 12)
+```
+
+## 2.3 Concentração/Dispersão por geografia (tabelas)
+
+```{r}
+# Curva de participação acumulada (UF)
+uf_rank <- uf |>
+  arrange(desc(TOTAL)) |>
+  mutate(Share = TOTAL / sum(TOTAL),
+         CumShare = cumsum(Share),
+         Rank = row_number())
+
+kable(uf_rank |> slice_head(n = 10) |> select(UF, TOTAL, Share, CumShare),
+      digits = 3, caption = "UF — Participação e participação acumulada (Top 10)")
+
+
+# Curva de participação acumulada (Municípios)
+mun_rank <- mun |>
+  arrange(desc(TOTAL)) |>
+  mutate(Share = TOTAL / sum(TOTAL),
+         CumShare = cumsum(Share),
+         Rank = row_number())
+
+kable(mun_rank |> slice_head(n = 10) |> select(MUNICIPIO, TOTAL, Share, CumShare),
+      digits = 3, caption = "Municípios — Participação e participação acumulada (Top 10)")
+```
+# 3 O perfil encontrado faz sentido para a economia local?
+Sim, o perfil identificado reflete características plausíveis da economia local. A elevada participação de setores ligados a serviços pessoais, comércio varejista de bairro e alimentação está em linha com a realidade dos pequenos empreendedores no Brasil, em especial em municípios de porte médio e grande. Essas atividades têm baixo custo de entrada, demanda constante e proximidade com consumidores finais, o que explica a escolha frequente por parte dos MEIs. Além disso, em regiões turísticas, é comum observar maior peso de hospedagem, alimentação e serviços ligados ao lazer, enquanto em localidades mais industriais surgem atividades relacionadas a apoio logístico, manutenção e pequenos serviços de produção. Em zonas rurais, por outro lado, não vemos grande participação de MEIs.
+
+# 4 O que mudaria se o recorte fosse a UF em vez do município?
+
+No recorte por UF, o perfil tende a ser mais diversificado, já que agrega diferentes realidades econômicas municipais dentro do mesmo estado. Ocupações muito representativas em um município específico podem perder peso relativo quando comparadas ao conjunto da UF. Enquanto que setores mais representativos (cabeleireiros, construção e transporte) costumam se destacar em praticamente todos os municípios e, portanto, aparecem de forma mais evidente no agregado estadual.
+
+# 5 Quais limitações dos dados ou do processo de coleta foram observadas?
+
+O processo de coleta exige, por vezes, copiar tabelas do site ou reorganizar arquivos (HTML, XLS), o que é trabalhoso e, muitas vezes, pode introduzir erros de formatação. Além disso, os dados podem ficar defasados em relação à realidade atual do mercado de trabalho, dado que são dados mais antigos. Por fim, as planilhas trazem apenas totais agregados (por UF ou município) dos MEIs, sem detalhamento de ocupações, o que limita a análise setorial. Note que existem várias subdivisões dentro dos MEIs, o que dificulta a profundidade da análise do setor.
