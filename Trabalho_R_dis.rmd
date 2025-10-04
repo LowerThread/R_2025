@@ -1,0 +1,291 @@
+---
+title: "Análise da Relação entre IDH e IDEB no Brasil"
+author: "Seu Nome Completo"
+date: "04/10/2025"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc_float: true
+    number_sections: true
+    code_fold: true
+    self-contained: true
+---
+
+##Importando Bibliotecas:
+```{r}
+library(readxl)
+library(dplyr)
+library(purrr)
+library(stringr)
+library(tidyr)
+library(ggplot2)
+library(scales)
+```
+
+##Bases Utilizadas
+Para a realização deste trabalho, foram selecionadas duas fontes de dados distintas, ambas provenientes do Instituto Brasileiro de Geografia e Estatística (IBGE), que fornecem uma visão macroeconômica e do mercado de trabalho no Brasil.
+
+A primeira base de dados é o Produto Interno Bruto (PIB), extraída do sistema de Contas Nacionais Trimestrais do IBGE. Desta fonte, foi utilizada a variável "Valores encadeados a preços de 1995 com ajuste sazonal" (Tabela 6613), que representa o volume do PIB em milhões de reais.
+
+A segunda origem de dados é a Pesquisa Nacional por Amostra de Domicílios Contínua (PNAD Contínua). Desta pesquisa, foram extraídas duas variáveis principais: o total de "Pessoas de 14 anos ou mais de idade" ocupadas, medida em milhares de pessoas (Tabela 4094), e a "Média de horas habitualmente trabalhadas por semana" no trabalho principal (Tabela 6371).
+
+O tratamento inicial dos dados, detalhado no código abaixo, envolve a leitura dos arquivos, a padronização dos nomes das colunas para facilitar a manipulação, a normalização do formato das datas para garantir a correta integração entre as bases e a conversão de valores textuais para numéricos. Mais detalhes sobre as variáveis finais podem ser encontrados na seção Glossário.
+
+##Limpeza e Integração
+```{r}
+pib_data    <- read_excel("PIB.xlsx",        col_types = c("date", "text", "numeric"))
+pop_data    <- read_excel("Pop_Ocupada.xlsx", col_types = c("date", "text", "numeric"))
+horas_data  <- read_excel("Horas_Trab.xlsx",  col_types = c("date", "text", "numeric"))
+```
+Nesse código, nós lemos os três arquivos Excel com os tipos de coluna fixados:
+1ª coluna como date
+2ª coluna como text,
+3ª coluna como numeric.
+Isso reduz problemas de parsing (ex: datas como texto).
+
+```{r}
+limpar_minimamente <- function(df) {
+  nm_data  <- names(df)[1]
+  nm_texto <- if (ncol(df) >= 2) names(df)[2] else NA_character_
+  nm_num   <- if (ncol(df) >= 3) names(df)[3] else NA_character_
+
+  df %>%
+    mutate(
+      !!nm_data := as.Date(!!sym(nm_data)),
+      !!nm_texto := if (!is.na(nm_texto)) str_squish(as.character(!!sym(nm_texto))) else NULL,
+      !!nm_num := if (!is.na(nm_num)) {
+        v <- !!sym(nm_num)
+        if (is.character(v)) {
+          v <- str_replace_all(v, "[^0-9,.-]", "")
+          v <- str_replace_all(v, ",", ".")
+          suppressWarnings(as.numeric(v))
+        } else {
+          as.numeric(v)
+        }
+      } else NULL
+    ) %>%
+    filter(!is.na(!!sym(nm_data))) %>%
+    arrange(!!sym(nm_data)) %>%
+    group_by(!!sym(nm_data)) %>%
+    slice_tail(n = 1) %>%
+    ungroup()
+}
+```
+
+Nesse bloco de código começamos nossa limpeza. Definimor uma função - limpar_minimamente() - que descobre os nomes da 1ª, 2ª e 3ª colunas; deixa a primeira coluna em Date; remove espaços extras na segunda coluna (texto) com str_squish; converte a 3ª coluna para numérica - tira símbolos, troca vírgula por ponto e transforma em numeric e remove linhas sem data, ordena por data e, se houver datas duplicadas, mantém a última ocorrência.
+
+```{r}
+pib_data    <- limpar_minimamente(pib_data)
+pop_data    <- limpar_minimamente(pop_data)
+horas_data  <- limpar_minimamente(horas_data)
+```
+
+Aplicamos nossa função em cada uma de nossas bases: pib_data; pop_data e horas_data
+
+```{r}
+lista_tabelas <- list(pib_data, pop_data, horas_data)
+
+dados_consolidados <- reduce(lista_tabelas, inner_join, by = "data")
+```
+
+Agora, montamos a lista_tabelas, que corresponde a uma tabela com as três bases já limpas e faz a união por data (lembre-se que já convertemos a data do excel para realmente ser uma data) usando reduce(...,INNER_JOIN, BY = "data"). O inner_join garante que só ficam as datas comuns às três bases - resultando em dados_consolidados.
+
+```{r}
+tabela_final <- dados_consolidados %>%
+  transmute(
+    Data = as.Date(data),
+    `PIB (R$ Milhões)` = valor_milhoes,
+    `População Ocupada (Mil)` = populacao_mil,
+    `Horas Semanais (Média)` = horas_semanais_media
+  ) %>%
+  arrange(Data)
+
+print(tabela_final, n = nrow(tabela_final))
+```
+
+Agora, criamos nossa tabela final. Nela, temos coluna Data (derivada de data), e as três métricas com os nomes finais que já estava em uso nas tabelas: PIB (R$ Milhões); População Ocupada (Mil) e Horas Semanais (Média). ordena por Data e imprime todo o resultado.
+
+#Adicionando Colunas de Interesse
+```{r}
+dados_calculados <- dados_consolidados %>%
+  mutate(
+    pib_per_capita_r = (valor_milhoes * 1e6) / (populacao_mil * 1e3),
+    produtividade_r_hora = (valor_milhoes * 1e6) / 
+                           ((populacao_mil * 1e3) * horas_semanais_media * weeks_in_quarter(data))
+  )
+tabela_final <- dados_calculados %>%
+  transmute(
+    Data = as.Date(data),
+    `PIB (R$ Milhões)`        = valor_milhoes,
+    `População Ocupada (Mil)` = populacao_mil,
+    `Horas Semanais (Média)`  = horas_semanais_media,
+    `Produtividade (R$/hora)` = produtividade_r_hora,
+    `PIB per Capita (R$)`     = pib_per_capita_r 
+  ) %>%
+  arrange(Data)
+
+print(tabela_final, n = nrow(tabela_final))
+```
+Após a integração das três bases (PIB, População Ocupada e Horas Semanais Médias) na sessão Limpeza e Integração, foram construídas duas variáveis derivadas fundamentais para a análise da produtividade:
+PIB per Capita (R$) - obtido dividindo o valor total do PIB (em reais) pela População Ocupada (em pessoas). Essa variável indica a produção média por trabalhador.
+Produtividade (R$/hora): Calculada como o PIB dividido pelo total de horas efetivamente trabalhadas no período. Portanto, o produto entre a população ocupada, o número médio de horas semanais e o número de semanas do trimestre. Essa métrica reflete o valor adicionado gerado por hora de trabalho, permitindo avaliar ganhos de eficiência ao longo do tempo.
+
+Note que convertemos todos os valores de milhões e milhares para níveis absolutos, garantindo a consistência dimensional entre as variáveis e compatibilidade para usarmos graficamente.
+
+##Glossário de Variáveis
+Data: Data de referência do Trimestre Observado. Está em formato date, isto é, YYYY/MM/DD.
+
+PIB (Milhões de Reais): Produto Interno Bruto a preços de mercado, em valores encadeados, conforme série 6613 das Contas Nacionais Trimestrais (IBGE). Unidade de medida em Milhões de reais correntes (R$).
+
+População Ocupada (Mil): Total de pessoas ocupadas no período, conforme PNAD Contínua Trimestral (IBGE). Unidade de medida em milhares de pessoas.
+
+Horas Semanais (Média): Média de horas habitualmente trabalhadas por semana pelos ocupados. Unidade de medida em horas por semana.
+
+PIB per Capita (R$): PIB dividido pela população ocupada, representando a renda média gerada por trabalhador. Unidade de medida em reais.
+
+Produtividade (R$/hora): PIB dividido pelo total de horas efetivamente trabalhadas (população ocupada × horas semanais médias × número de semanas no trimestre). Mede o valor adicionado por hora trabalhada. Unidade de medida em reais por hora.
+
+Observações Importantes: As unidades “milhões” e “milhares” foram convertidas para níveis absolutos antes dos cálculos derivados (× 1e6 e × 1e3). O número médio de semanas por trimestre foi considerado igual a 13, com base na frequência das observações trimestrais. Todas as datas foram padronizadas para o tipo Date e ordenadas cronologicamente.
+
+##Gráfico 1 + Interpretação
+```{r}
+tabela_ord <- tabela_final %>%
+  dplyr::arrange(Data)
+base_prod <- {
+  v <- dplyr::pull(tabela_ord, `Produtividade (R$/hora)`)
+  v[which(!is.na(v))[1]]
+}
+tabela_produtividade <- tabela_ord %>%
+  dplyr::transmute(
+    Data,
+    `Produtividade (R$/hora)` = `Produtividade (R$/hora)`,
+    `Produtividade (Índice Base 100)` = (`Produtividade (R$/hora)` / base_prod) * 100
+  )
+ponto_final <- tabela_produtividade %>%
+  dplyr::filter(!is.na(`Produtividade (Índice Base 100)`)) %>%
+  dplyr::slice_tail(n = 1)
+
+ggplot(tabela_produtividade, aes(x = Data, y = `Produtividade (Índice Base 100)`)) +
+  geom_line(color = "#2B3A67", linewidth = 1.4, na.rm = TRUE) +
+
+  geom_point(
+    data = ponto_final,
+    aes(y = `Produtividade (Índice Base 100)`),
+    color = "#2B3A67", size = 3.2,
+    na.rm = TRUE
+  ) +
+  geom_text(
+    data = ponto_final,
+    aes(label = paste0(round(`Produtividade (Índice Base 100)`, 1), " (base=100)")),
+    hjust = -0.15, vjust = 0.5,
+    color = "#2B3A67", fontface = "bold", size = 4,
+    na.rm = TRUE
+  ) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  scale_y_continuous(labels = scales::number_format(accuracy = 1)) +
+  coord_cartesian(clip = "off") +
+
+  theme_minimal(base_size = 13) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    axis.text.x = element_text(size = 11),
+    plot.title = element_text(face = "bold", size = 15, color = "#2B3A67"),
+    plot.subtitle = element_text(size = 12, color = "gray40"),
+    plot.caption = element_text(color = "gray50", hjust = 0),
+    plot.title.position = "plot",
+    plot.caption.position = "plot",
+    plot.margin = margin(10, 50, 10, 10)
+  ) +
+  labs(
+    title = "Produtividade por Hora Trabalhada — Índice (base 100)",
+    subtitle = "Evolução do PIB por hora efetiva de trabalho — Brasil, 2012–último dado disponível",
+    x = NULL, y = "Índice (base = 100)",
+    caption = "Fonte: IBGE (PIB, População Ocupada, Horas Trabalhadas). Elaboração própria."
+  )
+```
+
+O gráfico acima apresenta a evolução da produtividade por hora trabalhada no Brasil entre 2012 e 2025, medida como o PIB dividido pelo total de horas efetivamente trabalhadas (feita na sessão Colunas de Interesse). Os valores estão expressos em índice com base igual a 100 no ano de 2012, fizemos isso porque estamos interessados em avaliar as variações relativas de eficiência econômica ao longo do tempo. Observa-se que, ao final do primeiro trimestre de 2025, o índice alcança aproximadamente 106,2, indicando que a produtividade média do trabalho é cerca de 6% superior à observada em 2012, um número muito inexpressivo.
+
+Entre 2012 e 2014, nota-se um leve aumento da produtividade, refletindo o rescaldo do ciclo de expansão anterior, impulsionado pelo boom de commodities e pela utilização de capacidade ociosa acumulada na década anterior. Nesse intervalo, o PIB crescia a um ritmo ainda razoável e o mercado de trabalho mantinha-se aquecido, o que sustentava ganhos modestos de eficiência.
+
+A partir de 2015, contudo, a produtividade sofre uma queda acentuada, acompanhando a recessão profunda de 2015–2016. A contração de mais de 7% do PIB em dois anos, somada à lentidão na redução do emprego e das horas trabalhadas, provocou uma queda expressiva do PIB por hora. Essa deterioração esteve associada à crise fiscal, à instabilidade política, à paralisação dos investimentos e aos crescentes escândalos de corrupção, que comprimiram a capacidade produtiva e reduziram a eficiência da economia.
+
+No período de 2017 a 2019, a produtividade estabiliza-se em um patamar inferior, apresentando pequenas oscilações, mas sem tendência clara de crescimento. Essa estagnação reflete a lenta recuperação pós-recessão, marcada por baixo investimento, expansão do emprego informal e fraca recuperação dos salários reais. A economia voltou a empregar, mas sem incorporar ganhos de eficiência significativos.
+
+O choque da pandemia em 2020 provoca nova e abrupta queda, seguida por uma recuperação igualmente rápida em 2021. As medidas de isolamento social reduziram fortemente as horas trabalhadas, distorcendo temporariamente a métrica de produtividade. Com a reabertura da economia e a adaptação de setores ao trabalho remoto, os indicadores voltaram a se normalizar.
+
+A partir de 2021, observa-se uma trajetória de recuperação mais consistente, que se intensifica entre 2023 e 2025. Essa retomada está associada à reorganização produtiva pós-pandemia, à digitalização de processos, à realocação setorial da força de trabalho e ao fortalecimento de setores mais intensivos em capital e tecnologia, como agronegócio, energia, mineração e serviços digitais. O patamar de 2025, superior a 106 pontos, representa uma recomposição relevante, devolvendo o nível de produtividade a valores próximos do observado antes da recessão de 2015–2016 e da pandemia de 2020-2021.
+
+Do ponto de vista macroeconômico, o comportamento do indicador revela que a produtividade continua sendo o principal elo perdido do crescimento brasileiro. Mesmo após a recuperação recente, o ganho acumulado desde 2012 é modesto — cerca de 6% em treze anos, o que equivale a um crescimento médio anual inferior a 0,5%.
+
+##Gráfico 2 + Interpretação
+```{r}
+pib_per_capita <- tabela_final %>%
+  dplyr::arrange(Data) %>%
+  dplyr::transmute(
+    Data,
+    `PIB per Capita (R$)` = `PIB per Capita (R$)`
+  )
+base_pcap <- {
+  v <- dplyr::pull(pib_per_capita, `PIB per Capita (R$)`)
+  v[which(!is.na(v))[1]]
+}
+pib_per_capita_idx <- pib_per_capita %>%
+  dplyr::mutate(
+    `PIB per Capita (Índice Base 100)` = (`PIB per Capita (R$)` / base_pcap) * 100
+  )
+ponto_final <- pib_per_capita_idx %>%
+  dplyr::filter(!is.na(`PIB per Capita (Índice Base 100)`)) %>%
+  dplyr::slice_tail(n = 1)
+
+ggplot(pib_per_capita_idx, aes(x = Data, y = `PIB per Capita (Índice Base 100)`)) +
+  geom_line(color = "grey40", linewidth = 1.4, na.rm = TRUE) +
+  geom_point(
+    data = ponto_final,
+    aes(y = `PIB per Capita (Índice Base 100)`),
+    color = "grey40", size = 3.2, na.rm = TRUE
+  ) +
+  geom_text(
+    data = ponto_final,
+    aes(label = paste0(round(`PIB per Capita (Índice Base 100)`, 1), " (base=100)")),
+    hjust = -0.15, vjust = 0.5,
+    color = "grey40", fontface = "bold", size = 4,
+    na.rm = TRUE
+  ) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  scale_y_continuous(labels = scales::number_format(accuracy = 1)) +
+  coord_cartesian(clip = "off") +
+  theme_minimal(base_size = 13) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    axis.text.x = element_text(size = 11),
+    plot.title = element_text(face = "bold", size = 15, color = "grey40"),
+    plot.subtitle = element_text(size = 12, color = "gray50"),
+    plot.caption = element_text(color = "gray60", hjust = 0),
+    plot.title.position = "plot",
+    plot.caption.position = "plot",
+    plot.margin = margin(10, 50, 10, 10)
+  ) +
+  labs(
+    title = "PIB per Capita — Índice (base 100)",
+    subtitle = "Evolução da renda média real por trabalhador ocupado — Brasil, 2012–último dado disponível",
+    x = NULL, y = "Índice (base = 100)",
+    caption = "Fonte: IBGE (PIB, População Ocupada). Elaboração própria."
+  )
+
+```
+
+O gráfico apresenta a evolução do PIB per capita em termos reais, medido por trabalhador ocupado, com base igual a 100 no primeiro período da série (2012). Ele permite observar como evoluiu a renda média gerada por cada pessoa ocupada na economia brasileira ao longo dos últimos treze anos.
+
+Analogamnte ao item anterior, podemos confirmar nossa tese de expansões e crises sofridas pelo Brasil. Entre 2012 e 2014, há uma leve trajetória ascendente, a partir de 2015, observa-se uma queda acentuada no índice, entre 2017 e 2019, o indicador permanece praticamente estagnado, em 2020, a pandemia da COVID-19 provoca uma queda abrupta e ao final do período (2025), o índice atinge um valor ligeiramente acima de 100, sugerindo que o PIB per capita no ano corrente é apenas um pouco maior do que em 2012.
+
+Em termos macroeconômicos, o gráfico evidencia que o crescimento brasileiro das últimas décadas carece de ganhos permanentes na renda média da população ocupada. Perceba que o PIB per capita brasileiro é composto por períodos de crescimento e recessão, mas carece de um platô estável de crescimento.
+
+##Divulgação de IA
+Durante o desenvolvimento deste projeto, foram utilizadas duas ferramentas de Inteligência Artificial, o ChatGPT (modelo GPT-5) e o Gemini.
+A utilização de ambas as IA's foi fundamental uma vez que, baseado na resposta de uma das inteligência artificiais, eu conseguia melhorar meu código constantemente por meio da solicitação de ajustes de uma IA para a outra.
+Os prompts utilizados foram relacionados ao cálculo de indicadores econômicos (produtividade e PIB per Capita), ajustes e padronização na limpeza das bases de dados do IBGE e melhorias visuais nos gráficos, principalmente na utilização do ggplot2.
+Note que todas etapas de programação, validação e interpretação foram feitas de forma autoral, revisadas e confirmadas manualmente por mim. 
